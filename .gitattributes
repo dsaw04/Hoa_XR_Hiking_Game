@@ -169,3 +169,10 @@ Packages/packages-lock.json linguist-generated
 
 # Exceptions for .asset files such as lightning pre-baking
 LightingData.asset     binary
+
+# TerrainData is binary even under Force Text serialization; the *.asset -> unity-yaml
+# rule sets eol=lf, which silently strips CRLF byte pairs out of the binary payload.
+Assets/*Terrain*.asset  -text
+
+# Documentation images are small - keep them out of LFS
+docs/**/*.png           -filter -diff -merge -text

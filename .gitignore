@@ -105,3 +105,21 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Visual Studio solution upgrade report
+UpgradeLog.htm
+
+# git-lfs hooks accidentally written to a literal dev/null path on Windows
+/dev/null/
+
+# Terrain Sample Asset Pack: authoring-only source referenced by no scene (~1.8 GB).
+# Re-import the pack from the Asset Store if you need to author new terrain.
+/Assets/TerrainSampleAssets/README.pdf*
+/Assets/TerrainSampleAssets/Textures/Heightmaps*
+/Assets/TerrainSampleAssets/TerrainBrushes*
+/Assets/TerrainSampleAssets/TerrainLayers*
+/Assets/TerrainSampleAssets/Textures/Terrain/*
+!/Assets/TerrainSampleAssets/Textures/Terrain/Grass_Moss_BaseColor.tif
+!/Assets/TerrainSampleAssets/Textures/Terrain/Grass_Moss_Normal.tif
+!/Assets/TerrainSampleAssets/Textures/Terrain/Grass_Moss_BaseColor.tif.meta
+!/Assets/TerrainSampleAssets/Textures/Terrain/Grass_Moss_Normal.tif.meta
