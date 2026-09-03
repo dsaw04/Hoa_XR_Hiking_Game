@@ -123,3 +123,7 @@ UpgradeLog.htm
 !/Assets/TerrainSampleAssets/Textures/Terrain/Grass_Moss_Normal.tif
 !/Assets/TerrainSampleAssets/Textures/Terrain/Grass_Moss_BaseColor.tif.meta
 !/Assets/TerrainSampleAssets/Textures/Terrain/Grass_Moss_Normal.tif.meta
+
+# Claude Code prompt inputs, not project documentation
+/report_correction_prompt.md
+/vr-capstone-phase1-prompt.md

@@ -1,0 +1,62 @@
+%%{init: {"flowchart": {"nodeSpacing": 40, "rankSpacing": 50}}}%%
+flowchart TB
+
+  subgraph L0["L0 &nbsp; Authoring &nbsp;·&nbsp; editor-only"]
+    WTG["<b>WalkingTrackGenerator</b><br/><i>bakes terrain, trail, ~1600 flora,<br/>crater lake, golden-hour sun</i>"]
+  end
+
+  subgraph L1["L1 &nbsp; Bootstrap and session gate"]
+    HPC["<b>HikingPlayerController</b><br/><i>orchestrator on OVRCameraRig</i>"]
+    MMM["<b>MovementModeManager</b><br/><i>singleton · PlayerPrefs</i>"]
+    BCI["<b>BodyCheckInUI</b><br/><i>accessibility check-in</i>"]
+  end
+
+  subgraph L2["L2 &nbsp; Locomotion"]
+    MT["<b>MovementTarget &times;2</b><br/><i>left / right punch orbs</i>"]
+    DHS["<b>DesktopHikeSimulator</b><br/><i>editor-only test input</i>"]
+  end
+
+  subgraph L3["L3 &nbsp; Environment and interaction"]
+    NIU["<b>NatureInfoUI</b>"]
+    NI["<b>NatureInteractable</b><br/><i>static registry · 6 NZ species</i>"]
+    WS["<b>WindSystem</b><br/><i>Perlin WindZone</i>"]
+  end
+
+  subgraph L4["L4 &nbsp; Shared infrastructure"]
+    VP["<b>VRPanel</b><br/><i>world-space UI helper</i>"]
+    OVR["<b>Meta XR / OVR SDK</b><br/><i>rig · input · haptics</i>"]
+    UNITY["<b>Unity</b><br/><i>CharacterController · Terrain<br/>WindZone · TextMeshPro</i>"]
+  end
+
+  WTG -. "bakes scene" .-> HPC
+  HPC --> BCI
+  BCI -- "OnSessionConfirmed" --> HPC
+  MMM -- "tuning scalars" --> HPC
+  HPC --> MMM
+  HPC --> MT
+  HPC -. "editor only" .-> DHS
+  DHS --> MT
+  NIU --> NI
+  BCI -.- VP
+  NIU -.- VP
+  HPC -.- OVR
+  MT -.- OVR
+  NIU -.- OVR
+
+  style L0 fill:#fbf1e2,stroke:#d7ad6b
+  style L1 fill:#e6f3f5,stroke:#8fc4cd
+  style L2 fill:#e6f3f5,stroke:#8fc4cd
+  style L3 fill:#eaf3e6,stroke:#a2c495
+  style L4 fill:#f0f1ec,stroke:#c1c7b8
+
+  classDef auth fill:#f6e4c8,stroke:#c9974a,color:#5a3f16;
+  classDef boot fill:#d6ebef,stroke:#2f96ac,color:#0c4652;
+  classDef loco fill:#d6ebef,stroke:#2f96ac,color:#0c4652;
+  classDef env  fill:#dcecd5,stroke:#5c9a4c,color:#2c4a22;
+  classDef infra fill:#e7e9e1,stroke:#98a189,color:#3a4030;
+
+  class WTG auth;
+  class HPC,MMM,BCI boot;
+  class MT,DHS loco;
+  class NIU,NI,WS env;
+  class VP,OVR,UNITY infra;
