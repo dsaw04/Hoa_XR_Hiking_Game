@@ -57549,19 +57549,19 @@ Terrain:
   m_Enabled: 1
   serializedVersion: 6
   m_TerrainData: {fileID: 15600000, guid: 58c139a8feddab84ebe47120f55ce1f6, type: 2}
-  m_TreeDistance: 2000
-  m_TreeBillboardDistance: 200
+  m_TreeDistance: 300
+  m_TreeBillboardDistance: 80
   m_TreeCrossFadeLength: 20
   m_TreeMaximumFullLODCount: 200
   m_DetailObjectDistance: 80
   m_DetailObjectDensity: 1
-  m_HeightmapPixelError: 5
-  m_SplatMapDistance: 1000
+  m_HeightmapPixelError: 15
+  m_SplatMapDistance: 150
   m_HeightmapMinimumLODSimplification: 0
   m_HeightmapMaximumLOD: 0
-  m_ShadowCastingMode: 2
+  m_ShadowCastingMode: 0
   m_DrawHeightmap: 1
-  m_DrawInstanced: 0
+  m_DrawInstanced: 1
   m_DrawTreesAndFoliage: 1
   m_StaticShadowCaster: 0
   m_IgnoreQualitySettings: 0

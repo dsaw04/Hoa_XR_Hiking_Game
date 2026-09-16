@@ -34,7 +34,10 @@ public class TorchGateMist : MonoBehaviour
     const float SinkDepth    = 1.5f;  // push the base under the ground so no gap shows
     const int   Columns      = 18;
     const int   Rows         = 4;
-    const float DrawDistance = 45f;
+    // Was 45 m. One of these exists per unlit gate (up to torchCount, minus
+    // whichever are already lit), each polling this every frame — a smaller
+    // radius means fewer of them are drawing at any given moment on the hike.
+    const float DrawDistance = 25f;
     const float RebuildDrift = 8f;    // metres of travel along the wall before recentring
     const float FadeSeconds  = 2.5f;
     const float MetresPerTile = 6f;   // noise texture repeat along the wall
@@ -53,6 +56,11 @@ public class TorchGateMist : MonoBehaviour
     static readonly float[] RowHeight01 = { 0.00f, 0.34f, 0.70f, 1.00f };
 
     static readonly Color MistTint = new Color(0.78f, 0.84f, 0.88f);   // cool, slightly blue
+
+    static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+    static readonly int ColorId     = Shader.PropertyToID("_Color");
+    static readonly int BaseMapId   = Shader.PropertyToID("_BaseMap");
+    static readonly int MainTexId   = Shader.PropertyToID("_MainTex");
 
     Material  mat;
     Renderer  rend;
@@ -334,11 +342,15 @@ public class TorchGateMist : MonoBehaviour
     {
         if (mat == null || rend == null) return;
 
-        // Scroll sideways with a slow upward drift so the fog reads as moving
-        // air rather than as a textured sheet.
-        SetOffset(mat, new Vector2(Time.time * 0.035f, Time.time * 0.012f));
+        if (dissipating)
+        {
+            // Keep scrolling through the fade so the burn-off still reads as
+            // moving air, not a sheet that stopped and then faded.
+            SetOffset(mat, new Vector2(Time.time * 0.035f, Time.time * 0.012f));
+            return;
+        }
 
-        if (dissipating || head == null) return;
+        if (head == null) return;
 
         Vector3 d     = head.position - mapCentre;
         float   along = Vector3.Dot(d, outward);
@@ -350,6 +362,12 @@ public class TorchGateMist : MonoBehaviour
 
         rend.enabled = near;
         if (!near) return;
+
+        // Scroll sideways with a slow upward drift so the fog reads as moving
+        // air rather than as a textured sheet — only while it is actually
+        // drawn, since up to Segments of these curtains can exist at once and
+        // most of them are off-screen most of the time.
+        SetOffset(mat, new Vector2(Time.time * 0.035f, Time.time * 0.012f));
 
         float want = Mathf.Clamp(along, 0f, outerRadius);
         if (!hasWindow || Mathf.Abs(want - windowCentre) > RebuildDrift)
@@ -402,20 +420,20 @@ public class TorchGateMist : MonoBehaviour
     // fallback uses _MainTex/_Color. Write whichever the material actually has.
     static void SetTint(Material m, Color c)
     {
-        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
-        if (m.HasProperty("_Color"))     m.SetColor("_Color", c);
+        if (m.HasProperty(BaseColorId)) m.SetColor(BaseColorId, c);
+        if (m.HasProperty(ColorId))     m.SetColor(ColorId, c);
     }
 
     static void SetTiling(Material m, Vector2 tiling)
     {
-        if (m.HasProperty("_BaseMap")) m.SetTextureScale("_BaseMap", tiling);
-        if (m.HasProperty("_MainTex")) m.SetTextureScale("_MainTex", tiling);
+        if (m.HasProperty(BaseMapId)) m.SetTextureScale(BaseMapId, tiling);
+        if (m.HasProperty(MainTexId)) m.SetTextureScale(MainTexId, tiling);
     }
 
     static void SetOffset(Material m, Vector2 offset)
     {
-        if (m.HasProperty("_BaseMap")) m.SetTextureOffset("_BaseMap", offset);
-        if (m.HasProperty("_MainTex")) m.SetTextureOffset("_MainTex", offset);
+        if (m.HasProperty(BaseMapId)) m.SetTextureOffset(BaseMapId, offset);
+        if (m.HasProperty(MainTexId)) m.SetTextureOffset(MainTexId, offset);
     }
 
     void OnDestroy()

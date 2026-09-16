@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 
 /// Generates a Mt Eden / Maungawhau-inspired volcanic cone hiking environment:
 ///   - Scoria cone with a bowl crater and crater lake
@@ -47,6 +48,42 @@ public static class WalkingTrackGenerator
         AssetDatabase.SaveAssets();
         UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
         Debug.Log("Mt Eden hiking trail generated.");
+    }
+
+    /// Repaints the terrain alphamap only — same path, same PaintTextures, none
+    /// of GenerateTrack's other steps (heightmap, vegetation, crater lake,
+    /// player spawn, lighting). For picking up a PaintTextures change (e.g. the
+    /// 6→4 layer merge below) without regenerating everything else the full
+    /// menu item touches. BuildLoopPoints is a pure function of PATH_SAMPLES —
+    /// no seeded RNG in it — so this reproduces the exact same path the terrain
+    /// was already carved against.
+    [MenuItem("Tools/Repaint Mt Eden Textures Only")]
+    public static void RepaintTexturesOnly()
+    {
+        Terrain terrain = Object.FindAnyObjectByType<Terrain>();
+
+        // A human running this from the menu already has SampleScene open —
+        // reloading it here would be a silent way to discard whatever else
+        // they have unsaved. Only fall back to opening it for a headless
+        // invocation (-executeMethod with no scene loaded), where there is
+        // nothing unsaved to lose.
+        if (terrain == null && Application.isBatchMode)
+        {
+            EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
+            terrain = Object.FindAnyObjectByType<Terrain>();
+        }
+
+        if (terrain == null) { Debug.LogError("No Terrain in scene."); return; }
+        TerrainData td = terrain.terrainData;
+
+        Undo.RecordObject(td, "Repaint Mt Eden Textures");
+
+        PaintTextures(td, BuildLoopPoints());
+
+        EditorUtility.SetDirty(td);
+        AssetDatabase.SaveAssets();
+        UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+        Debug.Log("Mt Eden terrain textures repainted.");
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -142,12 +179,24 @@ public static class WalkingTrackGenerator
 
     // ════════════════════════════════════════════════════════════════════════
     // TEXTURE PAINTING  — NZ volcanic palette
-    //   0 Grass_A      bright NZ green on lower/middle slopes
-    //   1 Pebbles_B    walking trail surface (compacted volcanic scoria)
+    //   0 Grass_A      bright NZ green on lower/middle slopes, and — folded in
+    //                  below — the damp mossy variation that used to be its
+    //                  own Grass_Moss layer
+    //   1 Pebbles_B    walking trail surface, and the shoulder that used to
+    //                  fade into a separate Soil_Rocks layer
     //   2 Rock         exposed volcanic rock on steep faces
-    //   3 Grass_Moss   moist mossy upper slopes near crater
-    //   4 Muddy        wet crater floor (dark volcanic earth)
-    //   5 Soil_Rocks   path shoulders and bare earth
+    //   3 Muddy        wet crater floor (dark volcanic earth)
+    //
+    // Was 6 layers (Grass_A, Pebbles_B, Rock, Grass_Moss, Muddy, Soil_Rocks).
+    // URP's terrain shader fits 4 layers in one pass; a 5th or 6th forces a
+    // second full pass over the whole terrain every frame. Grass_Moss and
+    // Soil_Rocks were the two safest to fold away: Muddy and Rock are hard
+    // colour breaks that would look wrong if softened into their neighbours
+    // (a green crater floor, a grey trail through solid rock), where moss and
+    // shoulder-soil were always a soft blend layered under a wider area —
+    // real texture, but the more affordable one to give up for a rendering
+    // pass. The blend math below (noise, distance falloff) is unchanged; only
+    // the channel each result lands in has moved.
     // ════════════════════════════════════════════════════════════════════════
     static void PaintTextures(TerrainData td, Vector2[] path)
     {
@@ -156,9 +205,7 @@ public static class WalkingTrackGenerator
             LoadLayer("Grass_A_TerrainLayer"),
             LoadLayer("Pebbles_B_TerrainLayer"),
             LoadLayer("Rock_TerrainLayer"),
-            LoadLayer("Grass_Moss_TerrainLayer"),
             LoadLayer("Muddy_TerrainLayer"),
-            LoadLayer("Soil_Rocks_TerrainLayer"),
         };
         foreach (var l in layers)
             if (l == null) { Debug.LogWarning("Terrain layer missing — skipping paint."); return; }
@@ -166,7 +213,7 @@ public static class WalkingTrackGenerator
         td.terrainLayers = layers;
 
         int res = td.alphamapResolution;
-        float[,,] m = new float[res, res, 6];
+        float[,,] m = new float[res, res, 4];
 
         for (int zi = 0; zi < res; zi++)
         {
@@ -236,14 +283,20 @@ public static class WalkingTrackGenerator
                     wS *= 1f - rf; wP *= 1f - rf; wMud *= 1f - rf;
                 }
 
-                float tot = wG + wP + wR + wM + wMud + wS;
+                // wM (moss) and wS (shoulder soil) were always computed as the
+                // complement of wG/wP within their own branch above — never an
+                // independently-varying blend — so folding them straight into
+                // wG/wP here reproduces exactly what they always resolved to
+                // once Grass_Moss/Soil_Rocks stop being separate textures.
+                wG += wM;
+                wP += wS;
+
+                float tot = wG + wP + wR + wMud;
                 if (tot < 1e-4f) tot = 1f;
                 m[zi, xi, 0] = wG   / tot;
                 m[zi, xi, 1] = wP   / tot;
                 m[zi, xi, 2] = wR   / tot;
-                m[zi, xi, 3] = wM   / tot;
-                m[zi, xi, 4] = wMud / tot;
-                m[zi, xi, 5] = wS   / tot;
+                m[zi, xi, 3] = wMud / tot;
             }
         }
 

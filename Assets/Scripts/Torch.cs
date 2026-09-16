@@ -49,6 +49,15 @@ public class Torch : MonoBehaviour
     /// Flashed when the torch is touched before its quota is met.
     static readonly Color DeniedColor = new Color(0.80f, 0.20f, 0.16f);
 
+    static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+
+    /// Beyond this, the bowl's flicker/pulse animation is not resolvable and
+    /// its point light (range 14) cannot be lighting anything visible — so a
+    /// settled (not mid-fade) torch this far from the head skips its per-frame
+    /// material write entirely rather than repainting a colour nobody can see.
+    const float UpdateRange    = 40f;
+    const float UpdateRangeSqr = UpdateRange * UpdateRange;
+
     // ── Identity ─────────────────────────────────────────────────────────────
     /// Position in the progression order; torch 0 opens the first gate.
     public int   Index        { get; private set; }
@@ -374,7 +383,12 @@ public class Torch : MonoBehaviour
         denyFlash    = Mathf.Max(0f, denyFlash    - Time.deltaTime * 1.6f);
         denyCooldown = Mathf.Max(0f, denyCooldown - Time.deltaTime);
 
-        UpdateBowlAndLight();
+        // Mid-fade always updates so the ignite/extinguish ramp never stalls;
+        // otherwise only bother animating the bowl material when it is close
+        // enough to matter.
+        bool fading   = litBlend > 0f && litBlend < 1f;
+        bool nearHead = head == null || (head.position - BowlPosition).sqrMagnitude <= UpdateRangeSqr;
+        if (fading || nearHead) UpdateBowlAndLight();
 
         if (IsLit) return;
         TryPlayerInteraction();
@@ -501,8 +515,8 @@ public class Torch : MonoBehaviour
 
     static void SetColorProperty(Material mat, Color c)
     {
-        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", c);
-        else                               mat.color = c;
+        if (mat.HasProperty(BaseColorId)) mat.SetColor(BaseColorId, c);
+        else                              mat.color = c;
     }
 
     void OnDestroy()
