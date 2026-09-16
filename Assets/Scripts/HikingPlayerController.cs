@@ -80,6 +80,12 @@ public class HikingPlayerController : MonoBehaviour
         if (OVRManager.instance != null)
             OVRManager.instance.trackingOriginType = OVRManager.TrackingOrigin.EyeLevel;
 
+        // Fixed foveated rendering: the periphery of a dense NZ-bush hillside is
+        // exactly the fill-rate cost FFR is built to hide, and it costs nothing
+        // to the centre of vision where the trail and the plants actually are.
+        OVRManager.useDynamicFoveatedRendering = true;
+        OVRManager.foveatedRenderingLevel      = OVRManager.FoveatedRenderingLevel.HighTop;
+
         // Drop the player onto the trail before anything else reads their pose.
         SpawnOnTrail();
 
@@ -190,7 +196,28 @@ public class HikingPlayerController : MonoBehaviour
 
         move.y = verticalVelocity;
         cc.Move(move * Time.deltaTime);
+
+        // Feed the harvest rest gate. Horizontal only — falling down a slope is
+        // not recovery, and it should not buy the player a work interval.
+        // Pushed from here rather than pulled by PlantCollection for the same
+        // reason TorchProgressionManager.Initialise is called from BeginSession:
+        // the managers do not reach back out into the scene for the player.
+        var collection = PlantCollection.Instance;
+        if (collection != null)
+        {
+            Vector3 travelled = cc.velocity;
+            travelled.y = 0f;
+            collection.AddTravel(travelled.magnitude * Time.deltaTime);
+        }
     }
+
+    /// Drops the player's walking momentum on the spot.
+    ///
+    /// Called when a harvest starts: momentum decays over about a second, so a
+    /// player who punch-ran up to a plant would keep drifting forward into their
+    /// own note lane and the first phrase would feel like it was rushing them.
+    /// Same problem TorchGateMist solves by zeroing momentum against fog walls.
+    internal void ZeroMomentum() => momentum = 0f;
 
     // Targets track the head after all movement for the frame is done.
     void LateUpdate()

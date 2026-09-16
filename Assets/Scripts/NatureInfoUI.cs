@@ -6,15 +6,18 @@ using TMPro;
 /// Proximity prompt + identification card for the flora, and the entry point
 /// into the plant-gathering workout.
 ///
-/// The flow is: stand near a plant → press → do the mini workout (PlantHarvest
-/// spawns a ring of punch orbs) → the sample is banked and the card opens as the
-/// reward. The card deliberately does NOT open at the start of the workout: it
-/// hangs 1.2 m in front of the face and the orbs sit out at the plant, so the
-/// player would be punching through it.
+/// The flow is: stand near a plant → press → work the HIIT interval
+/// (PlantHarvest streams punch notes down a lane) → the card opens with the
+/// result, and the sample banks if the interval was passed. The card
+/// deliberately does NOT open during the workout: it hangs 1.2 m in front of the
+/// face and the notes travel through exactly that corridor.
 ///
-/// Once the quota for the next torch is met (or the plant has already been
-/// gathered) pressing just opens the card, with no workout — the hike stays a
-/// place you can wander and read about plants, not only a place you grind them.
+/// Once the quota for the next torch is met, or the plant has already been
+/// gathered, or the player is still recovering from the last interval, pressing
+/// just opens the card with no workout — the hike stays a place you can wander
+/// and read about plants, not only a place you grind them. That fallback needs
+/// no special casing here: UpdatePromptText's default branch and HandlePress's
+/// Collectable check already cover every state but one.
 [DefaultExecutionOrder(100)]
 public class NatureInfoUI : MonoBehaviour
 {
@@ -29,12 +32,25 @@ public class NatureInfoUI : MonoBehaviour
     [Header("Auto-Setup")]
     [SerializeField] string floraRootName = "NZFlora";
 
+    // The nearest-plant scan is a linear pass over every NatureInteractable
+    // (1,000+ in the shipped scene). 10 Hz is far more than the player's own
+    // walking speed needs against a 3 m showDistance, and it turns a per-frame
+    // O(n) sqrt-free distance sweep into a tenth of that.
+    const float SearchInterval = 0.1f;
+    float searchTimer;
+    NatureInteractable nearest;
+    float nearDistSqr = float.MaxValue;
+    bool wasShowingPrompt;
+
     Canvas canvas, promptCanvas;
     TextMeshProUGUI nameText, sciText, descText, factText, typeText, progressText;
     TextMeshProUGUI promptText;
     Transform cam;
     OVRCameraRig rig;
     NatureInteractable showing;
+    /// Result of the harvest the open card is reporting, if it is reporting one.
+    /// Cleared whenever a card is opened by plain identification instead.
+    HarvestResult? lastResult;
 
     void Start()
     {
@@ -50,24 +66,24 @@ public class NatureInfoUI : MonoBehaviour
                 if (child.GetComponent<NatureInteractable>() == null)
                     child.gameObject.AddComponent<NatureInteractable>();
 
-        canvas.gameObject.SetActive(false);
-        promptCanvas.gameObject.SetActive(false);
+        canvas.enabled = false;
+        promptCanvas.enabled = false;
     }
 
     void Update()
     {
         if (cam == null) return;
 
-        // Find nearest interactable
-        NatureInteractable nearest = null;
-        float nearDist = float.MaxValue;
-        foreach (var ni in NatureInteractable.All)
+        searchTimer -= Time.deltaTime;
+        bool refreshed = false;
+        if (searchTimer <= 0f)
         {
-            float d = Vector3.Distance(cam.position, ni.transform.position);
-            if (d < nearDist) { nearDist = d; nearest = ni; }
+            searchTimer = SearchInterval;
+            RefreshNearest();
+            refreshed = true;
         }
 
-        bool inRange = nearest != null && nearDist <= showDistance;
+        bool inRange = nearest != null && nearDistSqr <= showDistance * showDistance;
 
         // OVR face buttons + index triggers + keyboard fallback for Meta XR
         // Simulator (Simulator maps right-A → E key, right-B → R key, trigger →
@@ -85,23 +101,40 @@ public class NatureInfoUI : MonoBehaviour
         if (pressed) HandlePress(nearest, inRange);
 
         // Auto-hide info panel when walking away from the plant it's showing
-        if (showing != null && Vector3.Distance(cam.position, showing.transform.position) > hideDistance)
+        if (showing != null &&
+            (cam.position - showing.transform.position).sqrMagnitude > hideDistance * hideDistance)
         {
-            canvas.gameObject.SetActive(false);
+            canvas.enabled = false;
             showing = null;
         }
 
         // Prompt shows only when near a plant, with no card open and no workout
         // in progress — during a harvest the orbs are the instruction.
-        bool showPrompt = inRange
-                       && !canvas.gameObject.activeSelf
-                       && PlantHarvest.Active == null;
+        bool showPrompt = inRange && !canvas.enabled && PlantHarvest.Active == null;
 
-        promptCanvas.gameObject.SetActive(showPrompt);
-        if (showPrompt) UpdatePromptText(nearest);
+        // Rebuild the label text only when the search actually refreshed (its
+        // inputs — nearest plant, quota, rest countdown — can't have moved in
+        // between) or on the frame the prompt first appears, not every frame
+        // it's merely still visible.
+        if (showPrompt && (refreshed || !wasShowingPrompt)) UpdatePromptText(nearest);
+        promptCanvas.enabled = showPrompt;
+        wasShowingPrompt = showPrompt;
 
-        if (canvas.gameObject.activeSelf)       TrackCanvas(canvas);
-        if (promptCanvas.gameObject.activeSelf) TrackCanvas(promptCanvas);
+        if (canvas.enabled)       TrackCanvas(canvas);
+        if (promptCanvas.enabled) TrackCanvas(promptCanvas);
+    }
+
+    void RefreshNearest()
+    {
+        NatureInteractable best = null;
+        float bestSqr = float.MaxValue;
+        foreach (var ni in NatureInteractable.All)
+        {
+            float d = (cam.position - ni.transform.position).sqrMagnitude;
+            if (d < bestSqr) { bestSqr = d; best = ni; }
+        }
+        nearest     = best;
+        nearDistSqr = bestSqr;
     }
 
     // ── Interaction ──────────────────────────────────────────────────────────
@@ -115,9 +148,9 @@ public class NatureInfoUI : MonoBehaviour
             return;
         }
 
-        if (canvas.gameObject.activeSelf)
+        if (canvas.enabled)
         {
-            canvas.gameObject.SetActive(false);
+            canvas.enabled = false;
             showing = null;
             return;
         }
@@ -133,19 +166,25 @@ public class NatureInfoUI : MonoBehaviour
         ShowCard(nearest);
     }
 
-    void OnHarvested(NatureInteractable plant)
+    /// Called when an interval ends past its commit point — passed or failed.
+    /// A free abort during the lead-in never reaches here.
+    void OnHarvested(HarvestResult result)
     {
-        PlantCollection.Instance?.TryGather(plant);
-        ShowCard(plant);
+        PlantCollection.Instance?.CompleteHarvest(result.Plant, result.Passed);
+        lastResult = result;
+        ShowCard(result.Plant, keepResult: true);
     }
 
-    void ShowCard(NatureInteractable ni)
+    void ShowCard(NatureInteractable ni, bool keepResult = false)
     {
         if (ni == null) return;
+        if (!keepResult) lastResult = null;
+
         showing = ni;
         Populate(ni);
-        canvas.gameObject.SetActive(true);
-        promptCanvas.gameObject.SetActive(false);
+        canvas.enabled = true;
+        promptCanvas.enabled = false;
+        wasShowingPrompt = false;
     }
 
     void Populate(NatureInteractable ni)
@@ -163,9 +202,32 @@ public class NatureInfoUI : MonoBehaviour
             return;
         }
 
+        // Numbers belong here and nowhere else. During the interval the player
+        // is working too hard to read anything — the plant's glow and the
+        // depleting ring carry it. Afterwards they are standing still and
+        // breathing, so this is where accuracy, rank and combo can land.
+        if (lastResult.HasValue)
+        {
+            var r = lastResult.Value;
+            string line = r.Passed
+                ? $"Sample secured · {r.Rank} · {r.Accuracy:P0} ({r.Hit}/{r.Spawned})"
+                : $"Sample lost · {r.Accuracy:P0} ({r.Hit}/{r.Spawned}) — {PlantHarvest.PassThreshold:P0} needed";
+
+            if (r.BestCombo > 2) line += $"  ·  best streak {r.BestCombo}";
+
+            line += r.Passed
+                ? $"\n{pc.Count} / {pc.Required} for the next torch."
+                : "\nThe plant is still here. Catch your breath and go again.";
+
+            progressText.text  = line;
+            progressText.color = r.Passed ? new Color(0.55f, 0.95f, 0.6f)
+                                          : new Color(0.95f, 0.62f, 0.5f);
+            return;
+        }
+
         progressText.text = pc.QuotaMet
             ? $"Samples ready — {pc.Count} / {pc.Required}. Light the next torch."
-            : $"Sample gathered — {pc.Count} / {pc.Required} for the next torch.";
+            : $"Samples — {pc.Count} / {pc.Required} for the next torch.";
         progressText.color = pc.QuotaMet ? VRPanel.Accent : new Color(0.55f, 0.95f, 0.6f);
     }
 
@@ -188,6 +250,13 @@ public class NatureInfoUI : MonoBehaviour
                 case PlantState.AlreadyGathered:
                     text = "[ E ]  Identify   ·   sampled";
                     break;
+                // Shown as a countdown rather than a refusal: the player is
+                // recovering, which is half of the training, not being blocked.
+                case PlantState.Recovering:
+                    text = pc.IsRetryOf(ni)
+                        ? $"[ E ]  Identify   ·   recover  {pc.RestRemaining:F0} s"
+                        : $"[ E ]  Identify   ·   walk on  {pc.MetresToGo:F0} m";
+                    break;
                 default:
                     text = "[ E ]  Identify";
                     break;
@@ -207,7 +276,9 @@ public class NatureInfoUI : MonoBehaviour
     {
         var go = new GameObject("NatureInfoPanel");
         canvas = go.AddComponent<Canvas>();
-        go.AddComponent<GraphicRaycaster>();
+        // No GraphicRaycaster: nothing on this panel is clickable, and the
+        // project routes every click through VRPointer against registered
+        // VRButtons rather than Unity's EventSystem (see VRButton's header).
         VRPanel.Configure(canvas, new Vector2(550f, 380f));
 
         var bg = MakeRect("BG", go.transform);
@@ -253,7 +324,6 @@ public class NatureInfoUI : MonoBehaviour
     {
         var go = new GameObject("NaturePromptPanel");
         promptCanvas = go.AddComponent<Canvas>();
-        go.AddComponent<GraphicRaycaster>();
         VRPanel.Configure(promptCanvas, new Vector2(320f, 48f));
 
         var bg = MakeRect("BG", go.transform);

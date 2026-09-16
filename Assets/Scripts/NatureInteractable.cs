@@ -10,8 +10,12 @@ public class NatureInteractable : MonoBehaviour
     [TextArea(2, 5)] public string description;
     [TextArea(1, 3)] public string funFact;
 
+    // List<T>, not IReadOnlyList<T>: NatureInfoUI.Update walks this every few
+    // frames, and foreach over the interface boxes List<T>.Enumerator into
+    // IEnumerator<T> and allocates every time. The concrete type gets the
+    // struct enumerator instead — zero allocation for the same loop.
     static readonly List<NatureInteractable> s_all = new();
-    public static IReadOnlyList<NatureInteractable> All => s_all;
+    public static List<NatureInteractable> All => s_all;
 
     static readonly Dictionary<string, (string disp, string sci, string desc, string fact)> k_db =
         new(System.StringComparer.OrdinalIgnoreCase)
