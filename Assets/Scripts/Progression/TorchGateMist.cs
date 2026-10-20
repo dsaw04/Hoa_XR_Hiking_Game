@@ -270,11 +270,17 @@ public class TorchGateMist : MonoBehaviour
 
     // Particles/Unlit rather than plain Unlit: it is the URP shader that
     // multiplies in vertex colour, which is where all of the softness lives.
-    static Material BuildMistMaterial()
+    //
+    // internal rather than private so HarvestMist can build its curtain from
+    // the same recipe and share the one noise texture, instead of duplicating
+    // the shader setup and generating a second 128x128 Perlin map. Following
+    // PunchOrb's convention: the new thing calls into the working one rather
+    // than the working one being refactored underneath a shipping feature.
+    internal static Material BuildMistMaterial(string name = "GateFog")
     {
         var shader = Shader.Find("Universal Render Pipeline/Particles/Unlit")
                   ?? Shader.Find("Sprites/Default");
-        var mat = new Material(shader) { name = "GateFog" };
+        var mat = new Material(shader) { name = name };
 
         var tex = NoiseTexture();
         mat.mainTexture = tex;
@@ -300,7 +306,7 @@ public class TorchGateMist : MonoBehaviour
     /// Two octaves of *tileable* Perlin noise. Mathf.PerlinNoise does not wrap,
     /// so each octave blends its four wrapped corners — without that the
     /// scrolling curtain shows a hard vertical seam every cycle.
-    static Texture2D NoiseTexture()
+    internal static Texture2D NoiseTexture()
     {
         if (s_noise != null) return s_noise;
 
@@ -418,19 +424,19 @@ public class TorchGateMist : MonoBehaviour
 
     // URP's Particles/Unlit uses _BaseMap/_BaseColor; the Sprites/Default
     // fallback uses _MainTex/_Color. Write whichever the material actually has.
-    static void SetTint(Material m, Color c)
+    internal static void SetTint(Material m, Color c)
     {
         if (m.HasProperty(BaseColorId)) m.SetColor(BaseColorId, c);
         if (m.HasProperty(ColorId))     m.SetColor(ColorId, c);
     }
 
-    static void SetTiling(Material m, Vector2 tiling)
+    internal static void SetTiling(Material m, Vector2 tiling)
     {
         if (m.HasProperty(BaseMapId)) m.SetTextureScale(BaseMapId, tiling);
         if (m.HasProperty(MainTexId)) m.SetTextureScale(MainTexId, tiling);
     }
 
-    static void SetOffset(Material m, Vector2 offset)
+    internal static void SetOffset(Material m, Vector2 offset)
     {
         if (m.HasProperty(BaseMapId)) m.SetTextureOffset(BaseMapId, offset);
         if (m.HasProperty(MainTexId)) m.SetTextureOffset(MainTexId, offset);

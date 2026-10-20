@@ -68,6 +68,13 @@ public class NatureInfoUI : MonoBehaviour
 
         canvas.enabled = false;
         promptCanvas.enabled = false;
+
+        // Both of these are one-off costs the first harvest would otherwise pay
+        // for on the frame the player presses: indexing every terrain tree so
+        // the lane can be aimed at clear ground, and building the screen fade
+        // that hides the step back into it.
+        HarvestClearance.Warm();
+        PlantHarvest.PrepareBlink(this, cam);
     }
 
     void Update()

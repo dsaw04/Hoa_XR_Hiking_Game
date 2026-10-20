@@ -43,7 +43,7 @@ public readonly struct HarvestResult
 /// Clear 65% of them and the sample banks; fall short and the plant survives for
 /// another attempt. Only one harvest runs at a time (`Active`).
 ///
-/// ── WHY A TIMED INTERVAL AND NOT A SET OF ORBS ───────────────────────────────
+/// ── WHY A TIMED INTERVAL AND NOT A SET OF ORBS ──────────────────────────────
 /// This game is an exergame, and its objectives are meant to read as HIIT work
 /// intervals. A count-based set is not an interval: it lets the player control
 /// the duration, so "do four orbs" can be three seconds or three minutes. A
@@ -51,7 +51,7 @@ public readonly struct HarvestResult
 /// variable how hard they work inside it. It is also what finally gives
 /// MovementModeManager.SessionMinutes something to mean.
 ///
-/// ── WHY NOTES APPROACH RATHER THAN SITTING STILL ─────────────────────────────
+/// ── WHY NOTES APPROACH RATHER THAN SITTING STILL ────────────────────────────
 /// This replaces an earlier version that spawned a static ring of orbs. A target
 /// that already exists at a fixed point in space rewards the *smallest* motion
 /// that reaches it — MovementTarget only checks proximity plus a speed floor, so
@@ -60,7 +60,7 @@ public readonly struct HarvestResult
 /// The exercise ends up enforced by the geometry instead of by a threshold that
 /// can be gamed.
 ///
-/// ── WHAT SCALES WITH WHAT ────────────────────────────────────────────────────
+/// ── WHAT SCALES WITH WHAT ───────────────────────────────────────────────────
 /// MovementMode is the *shape* of each rep (how far you reach, how hard you have
 /// to punch); MovementIntensity is the *volume* of reps (how dense the chart,
 /// how long the interval). This deliberately reverses the previous version,
@@ -86,9 +86,20 @@ public class PlantHarvest : MonoBehaviour
     const float LeadInSeconds  = 4f;
     const float SettleSeconds  = 0.6f;
     const float LingerSeconds  = 0.6f;
+    /// Fade back up from the stance blink. Long enough not to read as a glitch,
+    /// short enough that it is over well inside the lead-in.
+    const float BlinkSeconds   = 0.28f;
 
     // ── Lane ─────────────────────────────────────────────────────────────────
-    const float SpawnDistance  = 3.5f;   // m from the head, at the plant
+    /// Distance from the head to the spawn plane, which is where the plant is.
+    ///
+    /// This is a *requirement on where the player stands*, not a description of
+    /// where they happen to be. A harvest can only be started from inside
+    /// NatureInfoUI.showDistance (3 m), so taking it as a description — which
+    /// this constant's original comment did — put the spawn plane behind the
+    /// plant on every single harvest, and every note flew out through a canopy.
+    /// Setup now moves the player to satisfy it; see the stance block there.
+    const float LaneLength     = 3.5f;   // m from the head to the plant
     const float StrikeDistance = 0.5f;   // m from the head
     const float NoteSpeed      = 4.3f;   // m/s, fixed for every player
     const float LaneCentreDrop = 0.35f;  // lane mid-height below eye level
@@ -112,7 +123,7 @@ public class PlantHarvest : MonoBehaviour
     /// so they ARRIVE on it. Spawning on the beat instead is the classic
     /// rhythm-game mistake: every note lands late by its flight time and the
     /// whole thing feels unresponsive.
-    const float FlightSeconds = (SpawnDistance - StrikeDistance) / NoteSpeed;
+    const float FlightSeconds = (LaneLength - StrikeDistance) / NoteSpeed;
 
     // ── State ────────────────────────────────────────────────────────────────
     public NatureInteractable Plant { get; private set; }
@@ -154,6 +165,11 @@ public class PlantHarvest : MonoBehaviour
 
     AudioSource audioSource;
     Light       glow;
+    HarvestMist mist;
+    /// True between blacking the screen for the stance blink and finishing the
+    /// fade back up, so teardown can tell our own black screen from somebody
+    /// else's and only clear the one it put there.
+    bool        blinking;
     LineRenderer ring;
     Material    ringMat;
     // Fixed once per harvest (see BuildFeedback): the lane is hard-locked to
@@ -204,25 +220,11 @@ public class PlantHarvest : MonoBehaviour
         halfHeight    = BaseHalfHeight * reach;
         requiredSpeed = BaseHitSpeed   * effort;
 
-        // ── Lane frame, struck once and then hard-locked ─────────────────────
-        // The lane does not follow the head. You are harvesting *that* plant, so
-        // facing it is the correct posture and the instinct to face what you are
-        // punching does the work — no nagging, and no mid-interval wandering.
-        anchor = head.position;
-
-        Vector3 flat = Plant.transform.position - anchor;
-        flat.y = 0f;
-        if (flat.sqrMagnitude < 0.01f)
-            flat = Vector3.ProjectOnPlane(head.forward, Vector3.up);
-        if (flat.sqrMagnitude < 0.01f) flat = Vector3.forward;
-
-        toPlant   = flat.normalized;
-        laneDir   = -toPlant;
-        laneRight = Vector3.Cross(Vector3.up, toPlant).normalized;
-
-        strikeOrigin = anchor + toPlant * StrikeDistance;
-
         // ── Chart ────────────────────────────────────────────────────────────
+        // Built before anything with a side effect, because it is the only step
+        // that can fail. Everything below this either moves the player or puts
+        // geometry in the world, and a half-applied harvest that then returned
+        // false would leave them standing somewhere they did not ask to be.
         float duration  = DurationFor(intensity);
         float occupancy = OccupancyFor(intensity);
         int   seed      = HarvestChart.SeedFrom(Plant.name,
@@ -238,15 +240,137 @@ public class PlantHarvest : MonoBehaviour
         float lastArrival = LeadInSeconds + chart[chart.Count - 1].Beat * BeatSeconds;
         endTime = lastArrival + SettleSeconds;
 
-        // Momentum would keep pushing the player forward into their own lane for
-        // a second or two after they punch-ran up to the plant, and the notes
-        // would feel like they were rushing them. TorchGateMist already zeroes
-        // momentum on contact for exactly this class of problem.
-        var controller = rig.GetComponent<HikingPlayerController>();
-        if (controller != null) controller.ZeroMomentum();
+        TakeStance();
+
+        // ── Lane frame, struck once and then hard-locked ─────────────────────
+        // The lane does not follow the head. You are harvesting *that* plant, so
+        // facing it is the correct posture and the instinct to face what you are
+        // punching does the work — no nagging, and no mid-interval wandering.
+        // TakeStance is what makes that instinct pay off instead of punishing
+        // it: it leaves the plant at the far end of a corridor with nothing in
+        // it, which is where the head is already turned.
+        anchor = head.position;
+
+        Vector3 flat = Plant.transform.position - anchor;
+        flat.y = 0f;
+        if (flat.sqrMagnitude < 0.01f)
+            flat = Vector3.ProjectOnPlane(head.forward, Vector3.up);
+        if (flat.sqrMagnitude < 0.01f) flat = Vector3.forward;
+
+        toPlant   = flat.normalized;
+        laneDir   = -toPlant;
+        laneRight = Vector3.Cross(Vector3.up, toPlant).normalized;
+
+        strikeOrigin = anchor + toPlant * StrikeDistance;
 
         BuildFeedback();
         return true;
+    }
+
+    /// Steps the player back into their own note lane, behind a blink.
+    ///
+    /// Two things are wrong with harvesting from wherever the player happens to
+    /// be standing when they press. The plant is inside the corridor rather
+    /// than at the end of it (see LaneLength), and whatever else the open world
+    /// has put in that direction — a pohutukawa, the side of the crater — is in
+    /// there with it. HarvestClearance answers both at once: it picks the
+    /// nearest bearing whose corridor is actually empty, and a stance one lane
+    /// length back along it.
+    ///
+    /// ── WHY A BLINK AND NOT A WALK ──────────────────────────────────────────
+    /// Asking the player to punch-walk backwards onto a mark would be more
+    /// diegetic, but it means moving backwards in VR, which is where the worst
+    /// of the discomfort lives, and it invents a failure state ("you did not
+    /// reach the mark in time") for a game trying hard to be approachable. A
+    /// blink costs neither. What makes a teleport uncomfortable is *watching*
+    /// yourself translate, so the screen goes black on the frame of the move and
+    /// fades back up — nobody sees the translation, and what is on the other
+    /// side of it is the same world, two steps further from the same plant.
+    ///
+    /// Momentum is zeroed as part of the warp. A player who punch-ran up to a
+    /// plant would otherwise keep drifting forward into their own lane for a
+    /// second or so, and the first phrase would feel like it was rushing them.
+    void TakeStance()
+    {
+        var controller = rig.GetComponent<HikingPlayerController>();
+        if (controller == null) return;
+
+        // Half a note has to clear the corridor wall, plus a little slack, or a
+        // trunk grazing the edge still eats the notes in the outer slots.
+        float corridorRadius = halfWidth + NoteDiameter * 0.5f + 0.15f;
+
+        HarvestClearance.FindStance(Plant.transform.position, head.position, LaneLength,
+                                    corridorRadius, LaneCentreDrop, halfHeight,
+                                    out Vector3 stance, out _);
+
+        var fade = OVRScreenFade.instance;
+        if (fade != null) fade.SetExplicitFade(1f);
+
+        controller.WarpHeadTo(stance);
+
+        if (fade == null) return;
+        blinking = true;
+        StartCoroutine(BlinkUp(fade));
+    }
+
+    IEnumerator BlinkUp(OVRScreenFade fade)
+    {
+        for (float t = 0f; t < BlinkSeconds; t += Time.deltaTime)
+        {
+            if (fade == null) yield break;
+            fade.SetExplicitFade(1f - t / BlinkSeconds);
+            yield return null;
+        }
+        if (fade != null) fade.SetExplicitFade(0f);
+        blinking = false;
+    }
+
+    /// Creates the screen fade ahead of time so the first harvest's blink
+    /// actually blinks.
+    ///
+    /// Called from NatureInfoUI.Start alongside the clearance index warm-up,
+    /// because both are one-off costs that have no business landing on the frame
+    /// the player presses — and because OVRScreenFade builds its material in
+    /// Start, which has not run yet for a component added mid-frame. Without
+    /// this the first stance blink would be skipped, and the player would watch
+    /// themselves slide backwards exactly once per session.
+    public static void PrepareBlink(MonoBehaviour host, Transform head)
+    {
+        if (OVRScreenFade.instance != null) return;
+
+        var cam = head != null ? head.GetComponent<Camera>() : null;
+        if (cam == null) cam = Camera.main;
+        if (cam == null) return;
+        if (cam.GetComponent<OVRScreenFade>() != null) return;
+
+        // Its Start builds a material from this shader; if an Android build has
+        // stripped it, adding the component would log an error every frame
+        // instead of quietly doing nothing, and we would rather lose the blink.
+        if (Shader.Find("Oculus/Unlit Transparent Color") == null) return;
+
+        var fade = cam.gameObject.AddComponent<OVRScreenFade>();
+        fade.fadeOnStart = false;
+
+        if (host != null) host.StartCoroutine(ClearFadeQuad(fade));
+    }
+
+    /// Switches the fade quad off the frame after OVRScreenFade builds it.
+    ///
+    /// OVRScreenFade.Start adds a MeshRenderer and a full-view quad, but binds
+    /// the material and sets renderer.enabled only inside SetMaterialAlpha —
+    /// which nothing calls when fadeOnStart is off. The renderer is therefore
+    /// left enabled with a null material, and an unmaterialed renderer draws
+    /// with Unity's magenta error shader: a purple rectangle across the whole
+    /// view, from scene load until the first blink happens to fix it.
+    ///
+    /// One explicit zero-fade binds the material and disables the renderer,
+    /// which is the state the component should have started in. Deferred a
+    /// frame because SetMaterialAlpha no-ops while fadeMaterial is still null,
+    /// and the component we just added has not run its Start yet.
+    static IEnumerator ClearFadeQuad(OVRScreenFade fade)
+    {
+        yield return null;
+        if (fade != null) fade.SetExplicitFade(0f);
     }
 
     /// Interval length is the volume dial, so it comes from intensity — not from
@@ -311,8 +435,16 @@ public class PlantHarvest : MonoBehaviour
         ring.receiveShadows    = false;
         ring.positionCount     = 0;
 
-        ringCentre = anchor + toPlant * ((SpawnDistance + StrikeDistance) * 0.5f);
+        ringCentre = anchor + toPlant * ((LaneLength + StrikeDistance) * 0.5f);
         ringY      = anchor.y - 1.35f;
+
+        // The clearing closes in behind the plant for the length of the
+        // interval. HarvestClearance has already guaranteed the corridor is
+        // empty; this is about what is standing eight metres past the end of
+        // it, because a hillside of NZ bush is a busy, high-contrast background
+        // to read a 20 cm target against. Raised over the lead-in rather than
+        // popped, so it reads as weather and not as a loading screen.
+        mist = HarvestMist.Create(anchor, Plant.transform.position, LeadInSeconds);
     }
 
     static readonly Color UnsecuredColor = new Color(0.95f, 0.72f, 0.25f);
@@ -471,7 +603,7 @@ public class PlantHarvest : MonoBehaviour
         float x = (spec.SlotX - 1) * halfWidth;
         float y = (spec.SlotY - 1) * halfHeight;
 
-        Vector3 horizontal = anchor + toPlant * SpawnDistance + laneRight * x;
+        Vector3 horizontal = anchor + toPlant * LaneLength + laneRight * x;
         return new Vector3(horizontal.x, anchor.y - LaneCentreDrop + y, horizontal.z);
     }
 
@@ -546,6 +678,11 @@ public class PlantHarvest : MonoBehaviour
         if (ring != null) ring.positionCount = 0;
         if (glow != null) glow.intensity = 0f;
 
+        // Thinned out whether the interval passed, failed or was abandoned: the
+        // curtain is a reading aid, not a reward, and leaving it up to mark a
+        // result would make the world itself part of the scoring.
+        if (mist != null) { mist.Dismiss(); mist = null; }
+
         // Belt and braces: an interval can end mid-buzz, and a controller left
         // vibrating is the worst possible bug to ship to a headset.
         OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.LTouch);
@@ -578,6 +715,18 @@ public class PlantHarvest : MonoBehaviour
     {
         if (Active == this) Active = null;
         if (ringMat != null) Destroy(ringMat);
+
+        // The curtain outlives this object by its own fade, so it is not
+        // parented here and has to be told to go if we are torn down without
+        // Finish ever running — a scene change mid-interval, say.
+        if (mist != null) mist.Dismiss();
+
+        // Same reasoning as the vibration reset in Finish: torn down mid-blink
+        // there is nothing left running to fade the screen back up, and the
+        // player is left staring at black. Guarded on our own flag so this
+        // cannot clear a fade some other system is in the middle of.
+        if (blinking && OVRScreenFade.instance != null)
+            OVRScreenFade.instance.SetExplicitFade(0f);
     }
 
 #if UNITY_EDITOR

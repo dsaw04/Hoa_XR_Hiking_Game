@@ -219,6 +219,40 @@ public class HikingPlayerController : MonoBehaviour
     /// Same problem TorchGateMist solves by zeroing momentum against fog walls.
     internal void ZeroMomentum() => momentum = 0f;
 
+    /// Puts the player's head at `targetHeadPosition` (horizontally) and stands
+    /// them on the terrain there.
+    ///
+    /// Used by PlantHarvest to step the player back into their own note lane —
+    /// a harvest can only be started from within 3 m of a plant but the lane
+    /// needs 3.5 m, so without this the notes are born behind the plant.
+    ///
+    /// The delta is applied to the rig root rather than to the head, because
+    /// centerEyeAnchor's local pose belongs to the HMD and writing to it would
+    /// be overwritten by tracking on the next frame. Vertical placement copies
+    /// SpawnOnTrail exactly (root at eyeHeight above ground, CC toggled around
+    /// the write so it does not fight the teleport), which is the one pattern
+    /// in this project already proven not to leave the capsule embedded in a
+    /// slope. The caller is responsible for hiding the translation — see
+    /// PlantHarvest's blink.
+    internal void WarpHeadTo(Vector3 targetHeadPosition)
+    {
+        if (centerEye == null) return;
+
+        Vector3 delta = targetHeadPosition - centerEye.position;
+        delta.y = 0f;
+
+        Vector3 root = transform.position + delta;
+        if (terrain != null)
+            root.y = terrain.SampleHeight(root) + terrain.transform.position.y + eyeHeight;
+
+        cc.enabled = false;
+        transform.position = root;
+        cc.enabled = true;
+
+        verticalVelocity = 0f;
+        momentum         = 0f;
+    }
+
     // Targets track the head after all movement for the frame is done.
     void LateUpdate()
     {
